@@ -146,3 +146,7 @@ unused_qualifications = "warn"
 # against the latest _published_ copy.
 [patch.crates-io]
 rustls = { path = "rustls" }
+
+# Patch tokio-rustls to use our local rustls fork
+[patch."https://github.com/rustls/tokio-rustls"]
+rustls = { path = "rustls" }

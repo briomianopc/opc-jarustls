@@ -9,11 +9,12 @@ name = "proxy-core"
 path = "src/main.rs"
 
 [dependencies]
-# TLS with ECH support (local rustls fork via workspace patch)
-rustls = { version = "0.23", features = ["aws-lc-rs", "std"] }
+# TLS with ECH support (local rustls fork - direct path reference)
+rustls = { path = "../rustls", features = ["aws-lc-rs", "std"] }
 rustls-pki-types = "1.13"
 webpki-roots = "0.26"
-tokio-rustls = "0.26"
+# tokio-rustls from git with matching rustls version
+tokio-rustls = { git = "https://github.com/rustls/tokio-rustls", branch = "main" }
 
 # Yamux multiplexing
 yamux = "0.13"
