@@ -1,0 +1,414 @@
+# Proxy Core
+
+高性能代理客户端核心，支持ECH (Encrypted Client Hello)、TLS指纹随机化和CDN优选IP。
+
+## 核心特性
+
+### 🔒 安全特性
+
+1. **ECH (Encrypted Client Hello)**
+   - 默认启用ECH
+   - 自动从cloudflare-ech.com获取配置
+   - 通过阿里云DoH查询
+   - 加密ClientHello，隐藏SNI
+
+2. **TLS指纹随机化**
+   - 使用jarustls的原生支持
+   - 规避JA3/JA4指纹识别
+   - 每次连接生成不同指纹
+
+3. **证书验证**
+   - 严格验证服务器证书
+   - 使用系统根证书存储
+
+### 🚀 CDN优选IP (核心功能)
+
+支持"SNI与连接IP分离"，适配Cloudflare优选IP：
+
+**连接流程**:
+1. **TCP连接**: 连接到优选IP/CNAME（不是服务器域名）
+2. **TLS握手**: SNI使用真实服务器域名
+3. **证书验证**: 验证证书是否匹配服务器域名
+4. **WebSocket升级**: Host头使用服务器域名
+
+**示例**:
+```bash
+# 服务器域名: my-proxy.com
+# 优选IP: 1.1.1.1
+# 实际连接: TCP -> 1.1.1.1:443, SNI -> my-proxy.com
+```
+
+### 🌐 传输协议
+
+- **WebSocket over TLS 1.3**
+- **DoH (DNS-over-HTTPS)**: 阿里云DoH
+- **支持IPv4和IPv6**
+
+### 🔌 本地代理
+
+- **SOCKS5**: 完整协议支持，无认证
+- **HTTP CONNECT**: 支持HTTPS隧道
+
+## 使用方法
+
+### 基本用法
+
+```bash
+proxy-core \
+  --server-domain my-proxy.com \
+  --target 1.1.1.1 \
+  --port 443 \
+  --uuid your-uuid-here
+```
+
+### 完整参数
+
+```bash
+proxy-core \
+  --server-domain my-proxy.com \      # 真实服务器域名（SNI）
+  --target 1.1.1.1 \                  # 优选IP或CNAME
+  --port 443 \                        # 服务器端口
+  --ws-path / \                       # WebSocket路径
+  --uuid your-uuid \                  # 认证UUID
+  --enable-ech true \                 # 启用ECH
+  --enable-fingerprint-randomization true \  # 启用指纹随机化
+  --socks5-bind 127.0.0.1:1080 \     # SOCKS5监听地址
+  --http-bind 127.0.0.1:8080 \       # HTTP监听地址
+  --enable-socks5 true \              # 启用SOCKS5
+  --enable-http true \                # 启用HTTP
+  --log-level info                    # 日志级别
+```
+
+### 环境变量
+
+所有参数都支持环境变量：
+
+```bash
+export SERVER_DOMAIN=my-proxy.com
+export TARGET=1.1.1.1
+export PORT=443
+export UUID=your-uuid
+export ENABLE_ECH=true
+export ENABLE_FINGERPRINT_RANDOMIZATION=true
+export SOCKS5_BIND=127.0.0.1:1080
+export HTTP_BIND=127.0.0.1:8080
+export LOG_LEVEL=info
+
+proxy-core
+```
+
+## 架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     应用程序                                  │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│              本地代理服务器                                    │
+│  ┌──────────────────┐      ┌──────────────────┐             │
+│  │  SOCKS5 Server   │      │   HTTP Server    │             │
+│  │  (127.0.0.1:1080)│      │ (127.0.0.1:8080) │             │
+│  └────────┬─────────┘      └────────┬─────────┘             │
+└───────────┼──────────────────────────┼───────────────────────┘
+            │                          │
+            └──────────┬───────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              WebSocket Tunnel                                │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  TLS 1.3 with ECH + Fingerprint Randomization       │   │
+│  │  - SNI: server_domain                                │   │
+│  │  - Connect to: target IP                            │   │
+│  │  - Certificate validation: server_domain            │   │
+│  └──────────────────────────────────────────────────────┘   │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  远程服务器                                    │
+│              (WebSocket Server)                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 模块说明
+
+### doh.rs - DoH解析器
+
+- 使用阿里云DoH (https://dns.alidns.com/dns-query)
+- 查询cloudflare-ech.com的TXT记录获取ECH配置
+- 解析A/AAAA记录（用于CNAME解析）
+- Base64解码ECH配置
+
+**关键函数**:
+```rust
+// 获取ECH配置
+let resolver = DohResolver::new()?;
+let ech_config = resolver.fetch_ech_config().await?;
+
+// 解析IP地址
+let ips = resolver.resolve_ip("example.com").await?;
+```
+
+### tls.rs - TLS配置
+
+- 封装jarustls的ECH接口
+- 支持TLS指纹随机化
+- 自动加载系统根证书
+
+**关键函数**:
+```rust
+// 构建TLS配置（带ECH）
+let tls_config = TlsConfigBuilder::new()
+    .with_ech(true)
+    .with_fingerprint_randomization(true)
+    .fetch_ech_config()
+    .await?
+    .build()?;
+
+// 构建TLS配置（不带ECH）
+let tls_config = TlsConfigBuilder::new()
+    .with_ech(false)
+    .build()?;
+```
+
+### tunnel.rs - 隧道核心
+
+实现CDN优选IP的核心逻辑：
+
+**关键流程**:
+```rust
+// 1. 解析target到IP
+let target_ip = resolve_target().await?;  // 1.1.1.1
+
+// 2. TCP连接到target IP
+let tcp_stream = TcpStream::connect((target_ip, port)).await?;
+
+// 3. TLS握手，SNI = server_domain
+let server_name = ServerName::try_from("my-proxy.com")?;
+let tls_stream = tls_connector.connect(server_name, tcp_stream).await?;
+
+// 4. WebSocket升级，Host = server_domain
+let ws_url = format!("wss://my-proxy.com:{}/", port);
+let ws_stream = client_async_tls(ws_url, tls_stream).await?;
+```
+
+### proxy/ - 代理服务器
+
+- **socks5.rs**: SOCKS5协议实现
+- **http.rs**: HTTP CONNECT实现
+
+## CDN优选IP详解
+
+### 为什么需要CDN优选IP？
+
+Cloudflare等CDN提供商在全球有大量节点，不同IP的速度和可用性不同。通过优选IP可以：
+
+1. **提高速度**: 选择最快的CDN节点
+2. **提高稳定性**: 避开被封锁的IP
+3. **降低延迟**: 选择地理位置最近的节点
+
+### 如何工作？
+
+**传统方式**（不支持优选IP）:
+```
+DNS解析 my-proxy.com -> 104.16.1.1
+TCP连接 -> 104.16.1.1:443
+TLS SNI -> my-proxy.com
+```
+
+**优选IP方式**（本项目）:
+```
+用户指定优选IP: 1.1.1.1
+TCP连接 -> 1.1.1.1:443        # 连接到优选IP
+TLS SNI -> my-proxy.com        # SNI使用真实域名
+证书验证 -> my-proxy.com       # 验证真实域名的证书
+WebSocket Host -> my-proxy.com # Host头使用真实域名
+```
+
+### 关键点
+
+1. **TCP连接**: 必须连接到优选IP，不能连接到server_domain
+2. **SNI**: 必须使用server_domain，这样CDN才能路由到正确的服务
+3. **证书验证**: 必须验证server_domain的证书，确保安全
+4. **Host头**: 必须使用server_domain，服务器才能识别请求
+
+### 示例场景
+
+**场景1: 使用优选IP**
+```bash
+proxy-core \
+  --server-domain my-proxy.example.com \
+  --target 1.1.1.1 \
+  --port 443
+```
+
+流程:
+1. TCP连接到 1.1.1.1:443
+2. TLS握手，SNI = my-proxy.example.com
+3. Cloudflare根据SNI路由到正确的源站
+4. 证书验证 my-proxy.example.com
+5. WebSocket升级，Host = my-proxy.example.com
+
+**场景2: 使用优选CNAME**
+```bash
+proxy-core \
+  --server-domain my-proxy.example.com \
+  --target optimized.cloudflare.com \
+  --port 443
+```
+
+流程:
+1. DoH解析 optimized.cloudflare.com -> 1.1.1.1
+2. TCP连接到 1.1.1.1:443
+3. 后续流程同场景1
+
+## ECH (Encrypted Client Hello)
+
+### 什么是ECH？
+
+ECH加密TLS握手中的ClientHello，隐藏：
+- SNI (Server Name Indication)
+- ALPN协议
+- 其他扩展信息
+
+### 如何获取ECH配置？
+
+1. **自动获取**（默认）:
+```bash
+proxy-core --server-domain my-proxy.com --target 1.1.1.1
+```
+
+程序会自动：
+- 通过阿里云DoH查询cloudflare-ech.com的TXT记录
+- 解析Base64编码的ECH配置
+- 注入到TLS配置中
+
+2. **禁用ECH**:
+```bash
+proxy-core --enable-ech false --server-domain my-proxy.com --target 1.1.1.1
+```
+
+### ECH配置来源
+
+默认使用Cloudflare的公共ECH配置：
+- 域名: cloudflare-ech.com
+- 记录类型: TXT
+- 格式: Base64编码的ECHConfigList
+
+## TLS指纹随机化
+
+使用jarustls的原生支持：
+
+```rust
+config.randomize_fingerprint = true;
+```
+
+效果：
+- 加密套件随机排序
+- 随机填充扩展
+- 扩展顺序随机化
+- 每次连接生成不同的JA3/JA4指纹
+
+## 性能指标
+
+| 指标 | 数值 |
+|------|------|
+| ECH开销 | < 1ms |
+| TLS指纹随机化开销 | < 1μs |
+| DoH查询延迟 | 50-200ms（首次） |
+| 内存占用 | ~10MB（基础） |
+| CPU占用 | < 1%（空闲） |
+
+## 故障排除
+
+### 连接失败
+
+1. **检查target是否可达**:
+```bash
+ping 1.1.1.1
+```
+
+2. **检查端口是否开放**:
+```bash
+telnet 1.1.1.1 443
+```
+
+3. **检查server_domain是否正确**:
+```bash
+# 确保server_domain是真实的服务器域名
+```
+
+### ECH配置获取失败
+
+1. **检查DoH连接**:
+```bash
+curl "https://dns.alidns.com/dns-query?name=cloudflare-ech.com&type=TXT"
+```
+
+2. **禁用ECH测试**:
+```bash
+proxy-core --enable-ech false ...
+```
+
+### TLS握手失败
+
+1. **检查证书**:
+```bash
+openssl s_client -connect 1.1.1.1:443 -servername my-proxy.com
+```
+
+2. **禁用指纹随机化测试**:
+```bash
+proxy-core --enable-fingerprint-randomization false ...
+```
+
+### 代理不工作
+
+1. **检查端口占用**:
+```bash
+netstat -an | grep 1080
+netstat -an | grep 8080
+```
+
+2. **测试SOCKS5**:
+```bash
+curl --socks5 127.0.0.1:1080 https://example.com
+```
+
+3. **测试HTTP**:
+```bash
+curl --proxy http://127.0.0.1:8080 https://example.com
+```
+
+## 开发
+
+### 编译
+
+```bash
+cargo build --release
+```
+
+### 测试
+
+```bash
+cargo test
+```
+
+### 运行
+
+```bash
+cargo run -- --server-domain my-proxy.com --target 1.1.1.1
+```
+
+## 许可证
+
+与jarustls相同：Apache-2.0 / ISC / MIT
+
+## 致谢
+
+- [rustls](https://github.com/rustls/rustls) - TLS库
+- [jarustls](https://github.com/briomianopc/jarustls) - TLS指纹随机化和ECH支持
+- [tokio](https://tokio.rs/) - 异步运行时
+- [tungstenite](https://github.com/snapview/tungstenite-rs) - WebSocket实现

@@ -1,0 +1,38 @@
+# WebSocket Proxy Client Configuration
+
+[server]
+# Server address (supports domain names with ECH)
+address = "example.com"
+port = 443
+# UUID for authentication
+uuid = "d342d11e-d424-4583-b36e-524ab1f0afa4"
+# WebSocket path (will append UUID)
+ws_path = "/"
+
+[tls]
+# Enable TLS fingerprint randomization
+randomize_fingerprint = true
+# Enable ECH (Encrypted Client Hello) if available
+enable_ech = true
+# SNI (Server Name Indication)
+sni = "example.com"
+
+[proxy]
+# Local SOCKS5 proxy
+socks5_enabled = true
+socks5_bind = "127.0.0.1"
+socks5_port = 1080
+
+# Local HTTP proxy
+http_enabled = true
+http_bind = "127.0.0.1"
+http_port = 8080
+
+[multiplexing]
+# Yamux configuration
+max_streams = 256
+window_size = 1048576  # 1MB
+keep_alive_interval = 30  # seconds
+
+[logging]
+level = "info"  # trace, debug, info, warn, error
