@@ -240,32 +240,20 @@ async fn handle_proxy_connection(
 
     debug!("✅ Yamux stream opened for {}:{}", target.host(), target.port());
 
-    // Send CONNECT command through Yamux stream
+    // Send target address through Yamux stream (format: "host:port\n")
+    // The newline delimiter ensures server can parse target separately from data
     use tokio::io::AsyncWriteExt;
-    let connect_msg = if let Some(data) = &initial_data {
-        format!(
-            "CONNECT:{}:{}|{}",
-            target.host(),
-            target.port(),
-            String::from_utf8_lossy(data)
-        )
-    } else {
-        format!("CONNECT:{}:{}|", target.host(), target.port())
-    };
+    let target_addr = format!("{}:{}\n", target.host(), target.port());
+    yamux_stream.write_all(target_addr.as_bytes()).await?;
+    debug!("Sent target address: {}:{}", target.host(), target.port());
 
-    yamux_stream.write_all(connect_msg.as_bytes()).await?;
-    debug!("Sent CONNECT command");
-
-    // Wait for CONNECTED response
-    use tokio::io::AsyncReadExt;
-    let mut response = vec![0u8; 9]; // "CONNECTED"
-    yamux_stream.read_exact(&mut response).await?;
-    
-    if response != b"CONNECTED" {
-        anyhow::bail!("Failed to establish tunnel: unexpected response");
+    // Send initial data if any (e.g., HTTP request for plain HTTP proxy)
+    if let Some(data) = &initial_data {
+        yamux_stream.write_all(data).await?;
+        debug!("Sent {} bytes of initial data", data.len());
     }
 
-    debug!("✅ Tunnel established for {}:{}", target.host(), target.port());
+    debug!("✅ Yamux stream ready for {}:{}", target.host(), target.port());
 
     // Bidirectional copy between client and Yamux stream
     match tokio::io::copy_bidirectional(&mut client_stream, &mut yamux_stream).await {

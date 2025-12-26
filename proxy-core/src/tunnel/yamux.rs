@@ -71,24 +71,18 @@ impl AsyncRead for WebSocketAdapter {
                         Poll::Ready(Ok(()))
                     }
                     Message::Text(text) => {
-                        // Handle text messages (e.g., CONNECTED)
-                        if text == "CONNECTED" {
-                            trace!("Received CONNECTED message, continuing read");
-                            // Re-poll to get next message
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        } else {
-                            let data = text.into_bytes();
-                            let len = data.len().min(buf.remaining());
-                            buf.put_slice(&data[..len]);
-                            
-                            if data.len() > len {
-                                self.read_buffer = data[len..].to_vec();
-                                self.read_pos = 0;
-                            }
-                            
-                            Poll::Ready(Ok(()))
+                        // Convert text to binary data
+                        let data = text.into_bytes();
+                        let len = data.len().min(buf.remaining());
+                        buf.put_slice(&data[..len]);
+                        
+                        if data.len() > len {
+                            self.read_buffer = data[len..].to_vec();
+                            self.read_pos = 0;
                         }
+                        
+                        trace!("WebSocket read {} bytes (text)", len);
+                        Poll::Ready(Ok(()))
                     }
                     Message::Close(_) => {
                         debug!("WebSocket closed");

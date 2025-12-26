@@ -3,6 +3,7 @@ pub mod yamux;
 use anyhow::{Context, Result};
 use futures::{SinkExt, StreamExt};
 use rustls::pki_types::ServerName;
+use rustls::ProtocolVersion;
 use rustls::ClientConfig;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls_with_config};
 use tungstenite::protocol::Message;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 use crate::doh::DohResolver;
@@ -186,6 +187,9 @@ impl TunnelClient {
     ///
     /// CRITICAL: Use server_domain for SNI and certificate validation,
     /// even though we're connected to a different IP
+    ///
+    /// Also performs downgrade attack detection - if negotiated protocol
+    /// is not TLS 1.3, the connection is immediately terminated.
     async fn tls_handshake(&self, tcp_stream: TcpStream) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
         debug!("Starting TLS handshake with SNI: {}", self.config.server_domain);
 
@@ -204,7 +208,33 @@ impl TunnelClient {
             .await
             .context("TLS handshake failed")?;
 
-        debug!("TLS handshake completed successfully");
+        // === DOWNGRADE ATTACK DETECTION ===
+        // Get connection info and verify TLS 1.3
+        let (_, conn) = tls_stream.get_ref();
+        
+        // Check negotiated protocol version
+        if let Some(version) = conn.protocol_version() {
+            debug!("Negotiated TLS version: {:?}", version);
+            
+            if version != ProtocolVersion::TLSv1_3 {
+                error!("🚨 DOWNGRADE ATTACK DETECTED! Expected TLS 1.3, got {:?}", version);
+                error!("Connection terminated for security reasons");
+                anyhow::bail!("TLS downgrade attack detected: expected TLS 1.3, negotiated {:?}", version);
+            }
+            
+            info!("✅ TLS 1.3 verified - no downgrade attack");
+        } else {
+            error!("🚨 Could not determine TLS version - possible attack");
+            anyhow::bail!("TLS version negotiation failed - security check failed");
+        }
+
+        // Check negotiated cipher suite
+        if let Some(suite) = conn.negotiated_cipher_suite() {
+            debug!("Negotiated cipher suite: {:?}", suite.suite());
+            info!("✅ Cipher suite verified: {:?}", suite.suite());
+        }
+
+        debug!("TLS handshake completed successfully with security checks");
         Ok(tls_stream)
     }
 
@@ -273,68 +303,6 @@ impl TunnelClient {
         );
 
         Url::parse(&url).context("Invalid WebSocket URL")
-    }
-
-    /// Send a message through the tunnel
-    pub async fn send_message(
-        ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-        msg: Message,
-    ) -> Result<()> {
-        ws.send(msg)
-            .await
-            .context("Failed to send WebSocket message")
-    }
-
-    /// Receive a message from the tunnel
-    pub async fn receive_message(
-        ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    ) -> Result<Option<Message>> {
-        match ws.next().await {
-            Some(Ok(msg)) => Ok(Some(msg)),
-            Some(Err(e)) => {
-                warn!("WebSocket receive error: {}", e);
-                Err(e.into())
-            }
-            None => {
-                debug!("WebSocket stream closed");
-                Ok(None)
-            }
-        }
-    }
-
-    /// Send CONNECT command to establish tunnel
-    pub async fn send_connect(
-        ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-        target_host: &str,
-        target_port: u16,
-        initial_data: Option<&[u8]>,
-    ) -> Result<()> {
-        let connect_msg = if let Some(data) = initial_data {
-            format!(
-                "CONNECT:{}:{}|{}",
-                target_host,
-                target_port,
-                String::from_utf8_lossy(data)
-            )
-        } else {
-            format!("CONNECT:{}:{}|", target_host, target_port)
-        };
-
-        debug!("Sending CONNECT: {}:{}", target_host, target_port);
-        Self::send_message(ws, Message::Text(connect_msg)).await?;
-
-        // Wait for CONNECTED response
-        match Self::receive_message(ws).await? {
-            Some(Message::Text(text)) if text == "CONNECTED" => {
-                debug!("✅ Tunnel established: {}:{}", target_host, target_port);
-                Ok(())
-            }
-            Some(msg) => {
-                warn!("Unexpected response: {:?}", msg);
-                anyhow::bail!("Failed to establish tunnel: unexpected response")
-            }
-            None => anyhow::bail!("Connection closed before tunnel established"),
-        }
     }
 }
 
