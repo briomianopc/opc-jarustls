@@ -46,9 +46,11 @@ impl DohResolver {
     }
 
     /// Create a new DoH resolver with custom DoH endpoint
+    /// 
+    /// Note: Uses native-tls to avoid conflicts with local rustls fork.
+    /// DoH requests don't need fingerprint randomization.
     pub fn with_url(doh_url: impl Into<String>) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .use_rustls_tls()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .context("Failed to create HTTP client")?;

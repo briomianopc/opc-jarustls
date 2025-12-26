@@ -90,9 +90,10 @@ impl TlsConfigBuilder {
             // Convert EchConfig to EchMode
             let ech_mode = EchMode::from(ech_config);
             
-            // Build ClientConfig with ECH using aws-lc-rs provider
-            // IMPORTANT: with_ech() must be called BEFORE with_root_certificates()
-            ClientConfig::builder(Arc::new(aws_lc_rs::default_provider()))
+            // Build ClientConfig with ECH using aws-lc-rs TLS 1.3 only provider
+            // IMPORTANT: ECH requires TLS 1.3 only - using DEFAULT_TLS13_PROVIDER
+            // which has empty tls12_cipher_suites
+            ClientConfig::builder(Arc::new(aws_lc_rs::DEFAULT_TLS13_PROVIDER))
                 .with_ech(ech_mode)
                 .with_root_certificates(root_store)
                 .with_no_client_auth()

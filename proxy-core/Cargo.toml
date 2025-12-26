@@ -27,8 +27,8 @@ tokio = { version = "1.40", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
 
-# HTTP/DNS
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# HTTP/DNS (using native-tls to avoid conflicts with local rustls fork)
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"

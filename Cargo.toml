@@ -26,6 +26,8 @@ members = [
   "rustls-provider-test",
   # rustls cryptography provider for fuzzing
   "rustls-fuzzing-provider",
+  # proxy client with ECH and fingerprint randomization
+  "proxy-core",
 ]
 
 ## Deliberately not included in `members`:
